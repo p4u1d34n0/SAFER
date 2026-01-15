@@ -1,0 +1,35 @@
+# Source files (don't publish TypeScript source)
+src/
+tsconfig.json
+
+# Development
+.github/
+.vscode/
+.idea/
+examples/
+
+# Tests
+test/
+tests/
+*.test.ts
+*.spec.ts
+
+# Documentation (keep README, LICENSE, CHANGELOG)
+docs/
+CONTRIBUTING.md
+
+# Build artifacts
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Personal data
+.safer/
