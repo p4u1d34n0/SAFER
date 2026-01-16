@@ -1,0 +1,51 @@
+{
+  "name": "safer-desktop",
+  "version": "0.1.0",
+  "description": "SAFER Framework Desktop App",
+  "main": ".webpack/main",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "dev": "electron-forge start"
+  },
+  "keywords": [
+    "safer",
+    "productivity",
+    "electron"
+  ],
+  "author": "Paul Dean <paul.dean@oxfordop.co.uk>",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.5.0",
+    "@electron-forge/maker-deb": "^7.5.0",
+    "@electron-forge/maker-rpm": "^7.5.0",
+    "@electron-forge/maker-squirrel": "^7.5.0",
+    "@electron-forge/maker-zip": "^7.5.0",
+    "@electron-forge/plugin-webpack": "^7.5.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vercel/webpack-asset-relocator-loader": "^1.7.3",
+    "autoprefixer": "^10.4.19",
+    "buffer": "^6.0.3",
+    "css-loader": "^6.11.0",
+    "electron": "^32.2.5",
+    "events": "^3.3.0",
+    "fork-ts-checker-webpack-plugin": "^9.0.2",
+    "node-loader": "^2.0.0",
+    "postcss": "^8.4.38",
+    "postcss-loader": "^8.1.1",
+    "process": "^0.11.10",
+    "style-loader": "^3.3.4",
+    "tailwindcss": "^3.4.4",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.5.2",
+    "util": "^0.12.5"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
