@@ -36,8 +36,10 @@ class SAFERBridge {
 
   async createItem(title: string): Promise<void> {
     try {
-      execSync(`${this.saferPath} create "${title.replace(/"/g, '\\"')}"`, {
-        encoding: 'utf-8'
+      // Use /dev/null for stdin to prevent interactive prompts
+      execSync(`${this.saferPath} create "${title.replace(/"/g, '\\"')}" < /dev/null`, {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe']
       });
     } catch (error) {
       console.error('Error creating item:', error);

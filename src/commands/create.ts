@@ -50,45 +50,61 @@ export async function createCommand(
     title = answers.title;
   }
 
-  // Get additional details
-  const details = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'description',
-      message: 'Description (optional):',
-      default: options?.description || '',
-    },
-    {
-      type: 'input',
-      name: 'outcome',
-      message: 'Desired outcome:',
-      default: '',
-    },
-    {
-      type: 'input',
-      name: 'who',
-      message: 'For whom (stakeholders):',
-      default: config.user.name,
-    },
-    {
-      type: 'input',
-      name: 'when',
-      message: 'When needed (date):',
-      default: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    },
-    {
-      type: 'number',
-      name: 'timebox',
-      message: 'Time box (minutes):',
-      default: parseInt(options?.timebox || String(config.limits.defaultTimeBox)),
-    },
-    {
-      type: 'confirm',
-      name: 'addDod',
-      message: 'Add Definition of Done items now?',
-      default: true,
-    },
-  ]);
+  // Check if running in non-interactive mode
+  const isNonInteractive = process.env.SAFER_NON_INTERACTIVE === '1' || !process.stdin.isTTY;
+
+  let details;
+  if (isNonInteractive) {
+    // Use defaults for non-interactive mode
+    details = {
+      description: options?.description || '',
+      outcome: '',
+      who: config.user.name,
+      when: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      timebox: parseInt(options?.timebox || String(config.limits.defaultTimeBox)),
+      addDod: false,
+    };
+  } else {
+    // Get additional details interactively
+    details = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'description',
+        message: 'Description (optional):',
+        default: options?.description || '',
+      },
+      {
+        type: 'input',
+        name: 'outcome',
+        message: 'Desired outcome:',
+        default: '',
+      },
+      {
+        type: 'input',
+        name: 'who',
+        message: 'For whom (stakeholders):',
+        default: config.user.name,
+      },
+      {
+        type: 'input',
+        name: 'when',
+        message: 'When needed (date):',
+        default: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      },
+      {
+        type: 'number',
+        name: 'timebox',
+        message: 'Time box (minutes):',
+        default: parseInt(options?.timebox || String(config.limits.defaultTimeBox)),
+      },
+      {
+        type: 'confirm',
+        name: 'addDod',
+        message: 'Add Definition of Done items now?',
+        default: true,
+      },
+    ]);
+  }
 
   // Collect DoD items
   const dodItems: string[] = [];
