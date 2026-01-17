@@ -26,7 +26,28 @@ export async function completeCommand(
   const dodComplete = item.fence.definitionOfDone.filter(d => d.completed).length;
   const dodTotal = item.fence.definitionOfDone.length;
 
-  if (dodTotal > 0 && dodComplete < dodTotal) {
+  // Check if no DoD items exist
+  if (dodTotal === 0) {
+    console.log(chalk.yellow(`⚠  No Definition of Done items defined`));
+    console.log(chalk.gray('It\'s recommended to define DoD items before completing.'));
+
+    const { continueAnyway } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'continueAnyway',
+        message: 'Complete without DoD?',
+        default: false,
+      },
+    ]);
+
+    if (!continueAnyway) {
+      console.log(chalk.gray('Cancelled'));
+      console.log(chalk.yellow(`\nAdd DoD items with: safer dod ${id} --add "<item>"`));
+      return;
+    }
+  }
+  // Check if DoD items are incomplete
+  else if (dodComplete < dodTotal) {
     console.log(chalk.yellow(`⚠  Definition of Done not complete (${dodComplete}/${dodTotal})`));
     console.log(chalk.gray('Incomplete items:'));
 
