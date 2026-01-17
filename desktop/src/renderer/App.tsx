@@ -374,6 +374,8 @@ function App() {
   function ItemDetailsView({ itemId }: { itemId: string }) {
     const [itemDetails, setItemDetails] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const [newDodText, setNewDodText] = useState('');
+    const [addingDod, setAddingDod] = useState(false);
 
     useEffect(() => {
       loadItemDetails();
@@ -405,7 +407,50 @@ function App() {
       }
     }
 
+    async function handleAddDod() {
+      if (!newDodText.trim()) return;
+
+      setAddingDod(true);
+      try {
+        await window.electronAPI.safer.dod.add(itemId, newDodText.trim());
+        setNewDodText('');
+        await loadItemDetails();
+        await loadItems();
+      } catch (error) {
+        console.error('Failed to add DoD:', error);
+        alert('Failed to add DoD item');
+      } finally {
+        setAddingDod(false);
+      }
+    }
+
     async function handleComplete() {
+      const currentItem = items.find(i => i.id === itemId);
+      if (!currentItem) return;
+
+      const dodTotal = currentItem.fence.definitionOfDone.length;
+      const dodComplete = currentItem.fence.definitionOfDone.filter(d => d.completed).length;
+
+      // Check if no DoD items exist
+      if (dodTotal === 0) {
+        const message = `⚠️ No Definition of Done items defined.\n\nIt's recommended to define DoD items before completing.\n\nAdd DoD items with the DoD tab below, or complete anyway?`;
+        if (!confirm(message)) {
+          return;
+        }
+      }
+      // Check if DoD items are incomplete
+      else if (dodComplete < dodTotal) {
+        const incompleteItems = currentItem.fence.definitionOfDone
+          .filter(d => !d.completed)
+          .map(d => `  ☐ ${d.text}`)
+          .join('\n');
+
+        const message = `⚠️ Definition of Done not complete (${dodComplete}/${dodTotal})\n\nIncomplete items:\n${incompleteItems}\n\nComplete anyway?`;
+        if (!confirm(message)) {
+          return;
+        }
+      }
+
       setCompleteItemId(itemId);
       setShowCompleteDialog(true);
     }
@@ -507,7 +552,7 @@ function App() {
           </div>
 
           {/* DoD Checklist */}
-          <div className="space-y-2">
+          <div className="space-y-2 mb-3">
             {itemDetails.fence?.definitionOfDone?.map((dod: any) => (
               <label
                 key={dod.id}
@@ -524,6 +569,34 @@ function App() {
                 </span>
               </label>
             ))}
+            {itemDetails.fence?.definitionOfDone?.length === 0 && (
+              <p className="text-sm text-gray-500 italic py-2">No DoD items yet. Add one below to get started.</p>
+            )}
+          </div>
+
+          {/* Add DoD Item */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newDodText}
+              onChange={(e) => setNewDodText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleAddDod();
+                }
+              }}
+              placeholder="Add DoD item..."
+              disabled={addingDod}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+            />
+            <button
+              onClick={handleAddDod}
+              disabled={!newDodText.trim() || addingDod}
+              className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm"
+            >
+              {addingDod ? '...' : '+ Add'}
+            </button>
           </div>
         </div>
 
@@ -559,10 +632,9 @@ function App() {
         <div className="space-y-2">
           <button
             onClick={handleComplete}
-            disabled={dodPercent < 100}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+            className="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
           >
-            {dodPercent < 100 ? 'Complete DoD First' : 'Mark Complete'}
+            Mark Complete
           </button>
           <button
             onClick={handleArchive}
