@@ -120,9 +120,10 @@ export interface DeliveryItem {
 
 export interface FocusSession {
   start: string;
-  end: string;
-  actualMinutes: number;
-  interruptions: number;
+  end: string | null;
+  duration: number | null;
+  actualMinutes?: number;
+  interruptions?: number;
   notes?: string;
 }
 

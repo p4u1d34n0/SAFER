@@ -73,10 +73,14 @@ export async function showCommand(id: string, options: { json?: boolean }) {
     console.log(chalk.cyan('Focus Sessions:'), item.fence.timeBox.sessions.length);
     item.fence.timeBox.sessions.forEach((session, index) => {
       const start = new Date(session.start).toLocaleString();
-      const end = new Date(session.end).toLocaleString();
-      console.log(chalk.gray(`  ${index + 1}.`), `${start} → ${end} (${session.actualMinutes} min)`);
-      if (session.interruptions > 0) {
+      const end = session.end ? new Date(session.end).toLocaleString() : 'In progress';
+      const duration = session.duration || session.actualMinutes || 0;
+      console.log(chalk.gray(`  ${index + 1}.`), `${start} → ${end} (${duration} min)`);
+      if (session.interruptions && session.interruptions > 0) {
         console.log(chalk.gray(`     Interruptions: ${session.interruptions}`));
+      }
+      if (session.notes) {
+        console.log(chalk.gray(`     Notes: ${session.notes}`));
       }
     });
   } else {

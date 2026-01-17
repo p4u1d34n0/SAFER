@@ -16,6 +16,8 @@ import { configCommand } from './commands/config';
 import { importCommand, importListCommand } from './commands/import';
 import { githubConfigureCommand, githubStatusCommand } from './commands/github';
 import { purgeAllCommand } from './commands/purge';
+import { startCommand } from './commands/start';
+import { stopCommand } from './commands/stop';
 
 const program = new Command();
 
@@ -55,6 +57,19 @@ program
   .option('-d, --description <desc>', 'Detailed description')
   .option('-t, --timebox <minutes>', 'Time box in minutes', '90')
   .action(requireInit(createCommand));
+
+// Start focus block
+program
+  .command('start')
+  .description('Start a focus block for an item')
+  .argument('<id>', 'Delivery item ID')
+  .action(requireInit(startCommand));
+
+// Stop focus block
+program
+  .command('stop')
+  .description('Stop the current focus block')
+  .action(requireInit(stopCommand));
 
 // List command
 program
