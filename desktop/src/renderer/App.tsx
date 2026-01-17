@@ -34,6 +34,8 @@ declare global {
         };
         metrics: () => Promise<any>;
         reviews: () => Promise<any[]>;
+        start: (id: string) => Promise<{ success: boolean }>;
+        stop: () => Promise<{ success: boolean }>;
       };
     };
   }
@@ -72,11 +74,28 @@ function App() {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [completeItemId, setCompleteItemId] = useState<string>('');
+  const [activeTimerId, setActiveTimerId] = useState<string | null>(null);
+  const [timerStartTime, setTimerStartTime] = useState<Date | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
     loadItems();
     loadConfig();
+    checkForActiveTimer();
   }, []);
+
+  // Timer tick effect
+  useEffect(() => {
+    if (!activeTimerId || !timerStartTime) return;
+
+    const interval = setInterval(() => {
+      const now = new Date();
+      const elapsed = Math.floor((now.getTime() - timerStartTime.getTime()) / 1000);
+      setElapsedSeconds(elapsed);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeTimerId, timerStartTime]);
 
   async function loadItems() {
     setLoading(true);
@@ -97,6 +116,62 @@ function App() {
     } catch (error) {
       console.error('Failed to load config:', error);
     }
+  }
+
+  async function checkForActiveTimer() {
+    try {
+      // Check all items for active sessions
+      const data = await window.electronAPI.safer.list();
+      for (const item of data) {
+        if (item.fence?.timeBox?.sessions) {
+          const activeSession = item.fence.timeBox.sessions.find((s: any) => !s.end);
+          if (activeSession) {
+            setActiveTimerId(item.id);
+            setTimerStartTime(new Date(activeSession.start));
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check for active timer:', error);
+    }
+  }
+
+  async function startTimer(itemId: string) {
+    try {
+      await window.electronAPI.safer.start(itemId);
+      setActiveTimerId(itemId);
+      setTimerStartTime(new Date());
+      setElapsedSeconds(0);
+      await loadItems(); // Refresh to show updated session data
+    } catch (error) {
+      console.error('Failed to start timer:', error);
+      alert('Failed to start focus block. Make sure no other session is active.');
+    }
+  }
+
+  async function stopTimer() {
+    try {
+      await window.electronAPI.safer.stop();
+      setActiveTimerId(null);
+      setTimerStartTime(null);
+      setElapsedSeconds(0);
+      await loadItems(); // Refresh to show updated session data
+    } catch (error) {
+      console.error('Failed to stop timer:', error);
+      alert('Failed to stop focus block.');
+    }
+  }
+
+  function formatElapsedTime(seconds: number): string {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   }
 
   function addDodItem() {
@@ -160,23 +235,58 @@ function App() {
     const dodComplete = item.fence.definitionOfDone.filter(d => d.completed).length;
     const dodTotal = item.fence.definitionOfDone.length;
     const dodPercent = dodTotal > 0 ? Math.round((dodComplete / dodTotal) * 100) : 0;
+    const isTimerActive = activeTimerId === item.id;
 
     return (
       <div
-        onClick={() => setSelectedItem(item.id)}
-        className="bg-white rounded-lg shadow-md p-4 mb-3 hover:shadow-lg transition-shadow cursor-pointer"
+        className="bg-white rounded-lg shadow-md p-4 mb-3 hover:shadow-lg transition-shadow"
       >
         <div className="flex items-start justify-between mb-2">
-          <div className="flex-1">
+          <div className="flex-1" onClick={() => setSelectedItem(item.id)} className="cursor-pointer">
             <div className="flex items-center gap-2 mb-1">
               <span className="text-blue-600 font-mono font-bold">{item.id}</span>
               <span className="text-xs bg-gray-200 px-2 py-1 rounded">Slot {item.fence.wipSlot}</span>
+              {isTimerActive && (
+                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded font-medium animate-pulse">
+                  ● Active
+                </span>
+              )}
             </div>
             <h3 className="text-lg font-semibold text-gray-800">{item.scope.title}</h3>
           </div>
+
+          <div className="flex flex-col gap-2 ml-3">
+            {isTimerActive ? (
+              <>
+                <div className="text-right font-mono text-lg font-bold text-green-600">
+                  {formatElapsedTime(elapsedSeconds)}
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    stopTimer();
+                  }}
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+                >
+                  ⏹ Stop
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startTimer(item.id);
+                }}
+                disabled={activeTimerId !== null}
+                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+              >
+                ▶ Start
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center gap-4 text-sm text-gray-600">
+        <div className="flex items-center gap-4 text-sm text-gray-600 cursor-pointer" onClick={() => setSelectedItem(item.id)}>
           <div className="flex items-center gap-1">
             <span>DoD:</span>
             <span className="font-medium">{dodComplete}/{dodTotal}</span>
@@ -189,7 +299,7 @@ function App() {
         </div>
 
         {dodTotal > 0 && (
-          <div className="mt-3">
+          <div className="mt-3 cursor-pointer" onClick={() => setSelectedItem(item.id)}>
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div
                 className="bg-blue-600 h-2 rounded-full transition-all"
