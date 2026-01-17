@@ -440,6 +440,31 @@ class SAFERBridge {
       return [];
     }
   }
+
+  async startFocusBlock(id: string): Promise<void> {
+    try {
+      execSync(`${this.saferPath} start ${id}`, {
+        encoding: 'utf-8',
+        env: { ...process.env, SAFER_NON_INTERACTIVE: '1' }
+      });
+    } catch (error) {
+      console.error('Error starting focus block:', error);
+      throw error;
+    }
+  }
+
+  async stopFocusBlock(): Promise<void> {
+    try {
+      // Stop current focus block with empty notes input
+      execSync(`echo "" | ${this.saferPath} stop`, {
+        encoding: 'utf-8',
+        shell: '/bin/bash'
+      });
+    } catch (error) {
+      console.error('Error stopping focus block:', error);
+      throw error;
+    }
+  }
 }
 
 const safer = new SAFERBridge();
@@ -564,6 +589,16 @@ function setupIPC() {
 
   ipcMain.handle('safer:reviews', async () => {
     return await safer.getReviews();
+  });
+
+  ipcMain.handle('safer:start', async (event, id: string) => {
+    await safer.startFocusBlock(id);
+    return { success: true };
+  });
+
+  ipcMain.handle('safer:stop', async () => {
+    await safer.stopFocusBlock();
+    return { success: true };
   });
 }
 

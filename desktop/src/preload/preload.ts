@@ -33,5 +33,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     metrics: () => ipcRenderer.invoke('safer:metrics'),
     reviews: () => ipcRenderer.invoke('safer:reviews'),
+    start: (id: string) => ipcRenderer.invoke('safer:start', id),
+    stop: () => ipcRenderer.invoke('safer:stop'),
   },
 });
