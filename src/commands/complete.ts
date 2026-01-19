@@ -6,7 +6,7 @@ import { commit } from '../lib/git';
 
 export async function completeCommand(
   id: string,
-  options: { stress?: string; archive?: boolean }
+  options: { stress?: string; learnings?: string; incidents?: string; archive?: boolean; yes?: boolean }
 ) {
   const item = getItem(id);
 
@@ -16,7 +16,15 @@ export async function completeCommand(
   }
 
   if (item.status === 'completed') {
-    console.log(chalk.yellow(`Item ${id} is already completed`));
+    // Already completed - but allow archiving if requested
+    if (options.archive) {
+      console.log(chalk.yellow(`Item ${id} is already completed - archiving now`));
+      archiveItem(item);
+      await commit(`Archived ${id}: ${item.scope.title}`);
+      console.log(chalk.green(`✓ Archived ${id}`));
+    } else {
+      console.log(chalk.yellow(`Item ${id} is already completed`));
+    }
     return;
   }
 
@@ -27,7 +35,7 @@ export async function completeCommand(
   const dodTotal = item.fence.definitionOfDone.length;
 
   // Check if no DoD items exist
-  if (dodTotal === 0) {
+  if (dodTotal === 0 && !options.yes) {
     console.log(chalk.yellow(`⚠  No Definition of Done items defined`));
     console.log(chalk.gray('It\'s recommended to define DoD items before completing.'));
 
@@ -47,7 +55,7 @@ export async function completeCommand(
     }
   }
   // Check if DoD items are incomplete
-  else if (dodComplete < dodTotal) {
+  else if (dodComplete < dodTotal && !options.yes) {
     console.log(chalk.yellow(`⚠  Definition of Done not complete (${dodComplete}/${dodTotal})`));
     console.log(chalk.gray('Incomplete items:'));
 
@@ -73,39 +81,52 @@ export async function completeCommand(
   }
 
   // Collect completion info
-  const answers = await inquirer.prompt([
-    {
-      type: 'number',
-      name: 'stressLevel',
-      message: 'Stress level (1-5):',
-      default: options.stress ? parseInt(options.stress) : item.review.stressLevel,
-      validate: (val: number) => val >= 1 && val <= 5,
-    },
-    {
-      type: 'input',
-      name: 'learnings',
-      message: 'Key learnings (optional):',
-      default: '',
-    },
-    {
-      type: 'confirm',
-      name: 'hadIncidents',
-      message: 'Any incidents (bugs, rollbacks)?',
-      default: false,
-    },
-  ]);
-
+  let answers;
   let incidents = item.review.incidents;
-  if (answers.hadIncidents) {
-    const { incidentCount } = await inquirer.prompt([
+
+  if (options.yes) {
+    // Non-interactive mode
+    const incidentCount = options.incidents ? parseInt(options.incidents) : 0;
+    answers = {
+      stressLevel: options.stress ? parseInt(options.stress) : item.review.stressLevel,
+      learnings: options.learnings || '',
+      hadIncidents: incidentCount > 0,
+    };
+    incidents = incidentCount;
+  } else {
+    answers = await inquirer.prompt([
       {
         type: 'number',
-        name: 'incidentCount',
-        message: 'Number of incidents:',
-        default: 1,
+        name: 'stressLevel',
+        message: 'Stress level (1-5):',
+        default: options.stress ? parseInt(options.stress) : item.review.stressLevel,
+        validate: (val: number) => val >= 1 && val <= 5,
+      },
+      {
+        type: 'input',
+        name: 'learnings',
+        message: 'Key learnings (optional):',
+        default: '',
+      },
+      {
+        type: 'confirm',
+        name: 'hadIncidents',
+        message: 'Any incidents (bugs, rollbacks)?',
+        default: false,
       },
     ]);
-    incidents = incidentCount;
+
+    if (answers.hadIncidents) {
+      const { incidentCount } = await inquirer.prompt([
+        {
+          type: 'number',
+          name: 'incidentCount',
+          message: 'Number of incidents:',
+          default: 1,
+        },
+      ]);
+      incidents = incidentCount;
+    }
   }
 
   const spinner = ora('Completing delivery item').start();
@@ -163,39 +184,41 @@ export async function completeCommand(
     console.log(chalk.gray('•'), 'View status:', chalk.yellow('safer status'));
     console.log(chalk.gray('•'), 'Create new item:', chalk.yellow('safer create'));
 
-    // Offer to import from GitHub if configured
-    const { loadConfig, checkWipLimit } = await import('../lib/data');
-    const config = loadConfig();
+    // Offer to import from GitHub if configured (skip in non-interactive mode)
+    if (!options.yes) {
+      const { loadConfig, checkWipLimit } = await import('../lib/data');
+      const config = loadConfig();
 
-    if (config.github?.enabled) {
-      const wipCheck = checkWipLimit();
+      if (config.github?.enabled) {
+        const wipCheck = checkWipLimit();
 
-      if (wipCheck.currentWip < wipCheck.maxWip) {
-        console.log();
-        const { importNew } = await inquirer.prompt([
-          {
-            type: 'confirm',
-            name: 'importNew',
-            message: `Import a new item from GitHub? (${wipCheck.maxWip - wipCheck.currentWip} slot${wipCheck.maxWip - wipCheck.currentWip > 1 ? 's' : ''} available)`,
-            default: true,
-          },
-        ]);
-
-        if (importNew) {
+        if (wipCheck.currentWip < wipCheck.maxWip) {
           console.log();
-          const { createGitHubImporter } = await import('../lib/importers/github');
-          const importer = createGitHubImporter();
+          const { importNew } = await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'importNew',
+              message: `Import a new item from GitHub? (${wipCheck.maxWip - wipCheck.currentWip} slot${wipCheck.maxWip - wipCheck.currentWip > 1 ? 's' : ''} available)`,
+              default: true,
+            },
+          ]);
 
-          try {
-            const result = await importer.import({ limit: 1 });
+          if (importNew) {
+            console.log();
+            const { createGitHubImporter } = await import('../lib/importers/github');
+            const importer = createGitHubImporter();
 
-            if (result.success && result.imported > 0) {
-              console.log(chalk.green(`\n✓ Imported ${result.items[0].id}: ${result.items[0].scope.title}`));
-            } else if (result.errors.length > 0) {
-              console.log(chalk.yellow(`\n⚠ ${result.errors[0]}`));
+            try {
+              const result = await importer.import({ limit: 1 });
+
+              if (result.success && result.imported > 0) {
+                console.log(chalk.green(`\n✓ Imported ${result.items[0].id}: ${result.items[0].scope.title}`));
+              } else if (result.errors.length > 0) {
+                console.log(chalk.yellow(`\n⚠ ${result.errors[0]}`));
+              }
+            } catch (error) {
+              console.log(chalk.yellow(`\n⚠ Could not import: ${error instanceof Error ? error.message : error}`));
             }
-          } catch (error) {
-            console.log(chalk.yellow(`\n⚠ Could not import: ${error instanceof Error ? error.message : error}`));
           }
         }
       }

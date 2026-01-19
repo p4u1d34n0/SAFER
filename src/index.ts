@@ -18,6 +18,7 @@ import { githubConfigureCommand, githubStatusCommand } from './commands/github';
 import { purgeAllCommand } from './commands/purge';
 import { startCommand } from './commands/start';
 import { stopCommand } from './commands/stop';
+import { reviewCommand } from './commands/review';
 
 const program = new Command();
 
@@ -106,7 +107,10 @@ program
   .description('Mark delivery item as complete')
   .argument('<id>', 'Delivery item ID')
   .option('--stress <level>', 'Stress level (1-5)', '3')
+  .option('--learnings <text>', 'Key learnings from this delivery')
+  .option('--incidents <count>', 'Number of incidents (bugs, rollbacks)', '0')
   .option('--archive', 'Archive immediately after completing')
+  .option('-y, --yes', 'Non-interactive mode (skip prompts)')
   .action(requireInit(completeCommand));
 
 // Archive command
@@ -272,6 +276,18 @@ program
   .command('github:status')
   .description('Show GitHub connection status and open PRs/issues')
   .action(githubStatusCommand);
+
+// Review command
+program
+  .command('review')
+  .description('Create a weekly review with metrics and reflections')
+  .option('-y, --yes', 'Non-interactive mode (skip prompts)')
+  .option('--went-well <text>', 'What went well this week')
+  .option('--didnt-go-well <text>', 'What didn\'t go well')
+  .option('--blockers <text>', 'Blockers encountered')
+  .option('--learnings <text>', 'Key learnings')
+  .option('--adjustments <text>', 'Adjustments for next week')
+  .action(requireInit(reviewCommand));
 
 // Purge all command
 program

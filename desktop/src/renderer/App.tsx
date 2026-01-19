@@ -1,4 +1,54 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, memo } from 'react';
+import { marked } from 'marked';
+
+// Isolated timer component - only this re-renders on tick
+const TimerDisplay = memo(function TimerDisplay({
+  startTime,
+  isActive
+}: {
+  startTime: Date | null;
+  isActive: boolean;
+}) {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!isActive || !startTime) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    // Set initial elapsed time
+    const now = new Date();
+    setElapsedSeconds(Math.floor((now.getTime() - startTime.getTime()) / 1000));
+
+    const interval = setInterval(() => {
+      const now = new Date();
+      const elapsed = Math.floor((now.getTime() - startTime.getTime()) / 1000);
+      setElapsedSeconds(elapsed);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isActive, startTime]);
+
+  const formatElapsedTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  if (!isActive) return null;
+
+  return (
+    <div className="text-right font-mono text-lg font-bold text-green-600">
+      {formatElapsedTime(elapsedSeconds)}
+    </div>
+  );
+});
 
 // TypeScript declarations for our API
 declare global {
@@ -8,8 +58,16 @@ declare global {
         list: () => Promise<any[]>;
         create: (title: string) => Promise<{ success: boolean }>;
         status: () => Promise<any>;
+        systemStatus: () => Promise<{
+          location: string;
+          user: { name: string; email: string };
+          wip: { current: number; max: number };
+          git: { initialized: boolean; autoCommit: boolean; uncommittedChanges: boolean; remoteSync: boolean };
+          integrations: { calendar: boolean; gitHooks: boolean; github: boolean; githubConnected: boolean; dashboardPort: number };
+          review: { enforced: boolean; dayOfWeek: number; gracePeriodHours: number };
+        } | null>;
         show: (id: string) => Promise<any>;
-        complete: (id: string, stressLevel: number) => Promise<{ success: boolean }>;
+        complete: (id: string, options: { stressLevel: number; learnings: string; incidents: number; archive: boolean }) => Promise<{ success: boolean }>;
         delete: (id: string) => Promise<{ success: boolean }>;
         archive: (id: string) => Promise<{ success: boolean }>;
         config: {
@@ -34,6 +92,9 @@ declare global {
         };
         metrics: () => Promise<any>;
         reviews: () => Promise<any[]>;
+        createReview: (options: { wentWell: string; didntGoWell: string; blockers: string; learnings: string; adjustments: string }) => Promise<{ success: boolean }>;
+        updateReview: (weekId: string) => Promise<{ success: boolean }>;
+        checkReviewStatus: () => Promise<{ needed: boolean; weekId: string; daysOverdue: number }>;
         start: (id: string) => Promise<{ success: boolean }>;
         stop: () => Promise<{ success: boolean }>;
       };
@@ -76,26 +137,24 @@ function App() {
   const [completeItemId, setCompleteItemId] = useState<string>('');
   const [activeTimerId, setActiveTimerId] = useState<string | null>(null);
   const [timerStartTime, setTimerStartTime] = useState<Date | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [reviewReminder, setReviewReminder] = useState<{ needed: boolean; weekId: string; daysOverdue: number } | null>(null);
+  const [reviewReminderDismissed, setReviewReminderDismissed] = useState(false);
 
   useEffect(() => {
     loadItems();
     loadConfig();
     checkForActiveTimer();
+    checkReviewStatus();
   }, []);
 
-  // Timer tick effect
-  useEffect(() => {
-    if (!activeTimerId || !timerStartTime) return;
-
-    const interval = setInterval(() => {
-      const now = new Date();
-      const elapsed = Math.floor((now.getTime() - timerStartTime.getTime()) / 1000);
-      setElapsedSeconds(elapsed);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [activeTimerId, timerStartTime]);
+  async function checkReviewStatus() {
+    try {
+      const status = await window.electronAPI.safer.checkReviewStatus();
+      setReviewReminder(status);
+    } catch (error) {
+      console.error('Failed to check review status:', error);
+    }
+  }
 
   async function loadItems() {
     setLoading(true);
@@ -142,7 +201,6 @@ function App() {
       await window.electronAPI.safer.start(itemId);
       setActiveTimerId(itemId);
       setTimerStartTime(new Date());
-      setElapsedSeconds(0);
       await loadItems(); // Refresh to show updated session data
     } catch (error) {
       console.error('Failed to start timer:', error);
@@ -155,23 +213,11 @@ function App() {
       await window.electronAPI.safer.stop();
       setActiveTimerId(null);
       setTimerStartTime(null);
-      setElapsedSeconds(0);
       await loadItems(); // Refresh to show updated session data
     } catch (error) {
       console.error('Failed to stop timer:', error);
       alert('Failed to stop focus block.');
     }
-  }
-
-  function formatElapsedTime(seconds: number): string {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   }
 
   function addDodItem() {
@@ -256,21 +302,17 @@ function App() {
           </div>
 
           <div className="flex flex-col gap-2 ml-3">
+            <TimerDisplay startTime={timerStartTime} isActive={isTimerActive} />
             {isTimerActive ? (
-              <>
-                <div className="text-right font-mono text-lg font-bold text-green-600">
-                  {formatElapsedTime(elapsedSeconds)}
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    stopTimer();
-                  }}
-                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
-                >
-                  ⏹ Stop
-                </button>
-              </>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  stopTimer();
+                }}
+                className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+              >
+                ⏹ Stop
+              </button>
             ) : (
               <button
                 onClick={(e) => {
@@ -655,15 +697,30 @@ function App() {
 
   function CompleteItemDialog() {
     const [stressLevel, setStressLevel] = useState(3);
+    const [learnings, setLearnings] = useState('');
+    const [hadIncidents, setHadIncidents] = useState(false);
+    const [incidentCount, setIncidentCount] = useState(1);
+    const [shouldArchive, setShouldArchive] = useState(true);
     const [saving, setSaving] = useState(false);
 
     async function handleComplete() {
       setSaving(true);
       try {
-        await window.electronAPI.safer.complete(completeItemId, stressLevel);
+        await window.electronAPI.safer.complete(completeItemId, {
+          stressLevel,
+          learnings,
+          incidents: hadIncidents ? incidentCount : 0,
+          archive: shouldArchive,
+        });
         setShowCompleteDialog(false);
         setSelectedItem(null);
         setCompleteItemId('');
+        // Reset form
+        setStressLevel(3);
+        setLearnings('');
+        setHadIncidents(false);
+        setIncidentCount(1);
+        setShouldArchive(true);
         await loadItems();
       } catch (error) {
         console.error('Failed to complete item:', error);
@@ -677,14 +734,14 @@ function App() {
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 w-96">
+        <div className="bg-white rounded-lg p-6 w-[450px] max-h-[90vh] overflow-y-auto">
           <h3 className="text-xl font-bold text-gray-800 mb-4">Complete Item</h3>
-          <p className="text-sm text-gray-600 mb-4">How stressful was this delivery item?</p>
 
-          <div className="mb-6">
-            <div className="flex justify-between mb-2">
-              <span className="text-sm text-gray-600">Stress Level: {stressLevel}/5</span>
-            </div>
+          {/* Stress Level */}
+          <div className="mb-5">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Stress Level: {stressLevel}/5
+            </label>
             <input
               type="range"
               min="1"
@@ -699,11 +756,77 @@ function App() {
             </div>
           </div>
 
+          {/* Learnings */}
+          <div className="mb-5">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Key Learnings (optional)
+            </label>
+            <textarea
+              value={learnings}
+              onChange={(e) => setLearnings(e.target.value)}
+              placeholder="What did you learn from this delivery?"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              rows={3}
+            />
+          </div>
+
+          {/* Incidents */}
+          <div className="mb-5">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hadIncidents}
+                onChange={(e) => setHadIncidents(e.target.checked)}
+                className="rounded"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                Had incidents (bugs, rollbacks, issues)
+              </span>
+            </label>
+            {hadIncidents && (
+              <div className="mt-2 ml-6">
+                <label className="block text-sm text-gray-600 mb-1">Number of incidents:</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="99"
+                  value={incidentCount}
+                  onChange={(e) => setIncidentCount(parseInt(e.target.value) || 1)}
+                  className="w-20 px-3 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Archive option */}
+          <div className="mb-6">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={shouldArchive}
+                onChange={(e) => setShouldArchive(e.target.checked)}
+                className="rounded"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                Archive immediately after completing
+              </span>
+            </label>
+            <p className="text-xs text-gray-500 mt-1 ml-6">
+              Moves item out of active list
+            </p>
+          </div>
+
           <div className="flex gap-2">
             <button
               onClick={() => {
                 setShowCompleteDialog(false);
                 setCompleteItemId('');
+                // Reset form
+                setStressLevel(3);
+                setLearnings('');
+                setHadIncidents(false);
+                setIncidentCount(1);
+                setShouldArchive(true);
               }}
               className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium transition-colors"
             >
@@ -749,6 +872,183 @@ function App() {
             {items.map(item => <ItemCard key={item.id} item={item} />)}
           </div>
         )}
+      </div>
+    );
+  }
+
+  function StatusView() {
+    const [status, setStatus] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+      loadStatus();
+    }, []);
+
+    async function loadStatus() {
+      setLoading(true);
+      try {
+        const data = await window.electronAPI.safer.systemStatus();
+        setStatus(data);
+      } catch (error) {
+        console.error('Failed to load status:', error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    if (loading) {
+      return (
+        <div className="p-6 max-w-4xl mx-auto">
+          <h1 className="text-3xl font-bold text-gray-800 mb-6">System Status</h1>
+          <div className="text-center py-12 text-gray-500">Loading...</div>
+        </div>
+      );
+    }
+
+    if (!status) {
+      return (
+        <div className="p-6 max-w-4xl mx-auto">
+          <h1 className="text-3xl font-bold text-gray-800 mb-6">System Status</h1>
+          <div className="text-center py-12 text-gray-500">Failed to load status</div>
+        </div>
+      );
+    }
+
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    return (
+      <div className="p-6 max-w-4xl mx-auto">
+        <h1 className="text-3xl font-bold text-gray-800 mb-6">System Status</h1>
+
+        <div className="space-y-6">
+          {/* WIP Status */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="text-xl">📊</span> Work In Progress
+            </h2>
+            <div className="flex items-center gap-4">
+              <div className={`text-4xl font-bold ${status.wip.current >= status.wip.max ? 'text-red-600' : 'text-green-600'}`}>
+                {status.wip.current}/{status.wip.max}
+              </div>
+              <div className="text-gray-600">
+                {status.wip.current >= status.wip.max ? (
+                  <span className="text-red-600 font-medium">WIP limit reached - complete items before adding more</span>
+                ) : status.wip.current === 0 ? (
+                  <span>No active delivery items</span>
+                ) : (
+                  <span>{status.wip.max - status.wip.current} slots available</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* User & Location */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="text-xl">👤</span> User & Location
+            </h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-sm text-gray-500">Name</div>
+                <div className="font-medium">{status.user.name || 'Not set'}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-500">Email</div>
+                <div className="font-medium">{status.user.email || 'Not set'}</div>
+              </div>
+              <div className="col-span-2">
+                <div className="text-sm text-gray-500">Data Location</div>
+                <div className="font-mono text-sm">{status.location}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Git Status */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="text-xl">📁</span> Git Version Control
+            </h2>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Initialized</span>
+                <span className={`px-2 py-1 rounded text-sm font-medium ${status.git.initialized ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {status.git.initialized ? 'Yes' : 'No'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Auto Commit</span>
+                <span className={`px-2 py-1 rounded text-sm font-medium ${status.git.autoCommit ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {status.git.autoCommit ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Remote Sync</span>
+                <span className={`px-2 py-1 rounded text-sm font-medium ${status.git.remoteSync ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {status.git.remoteSync ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              {status.git.uncommittedChanges && (
+                <div className="mt-2 text-amber-600 text-sm">
+                  ⚠️ You have uncommitted changes
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Integrations */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="text-xl">🔗</span> Integrations
+            </h2>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">GitHub</span>
+                <span className={`px-2 py-1 rounded text-sm font-medium ${status.integrations.githubConnected ? 'bg-green-100 text-green-700' : status.integrations.github ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {status.integrations.githubConnected ? 'Connected' : status.integrations.github ? 'Enabled (not connected)' : 'Disabled'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Calendar</span>
+                <span className={`px-2 py-1 rounded text-sm font-medium ${status.integrations.calendar ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {status.integrations.calendar ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Git Hooks</span>
+                <span className={`px-2 py-1 rounded text-sm font-medium ${status.integrations.gitHooks ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {status.integrations.gitHooks ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Review Settings */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="text-xl">📋</span> Weekly Review
+            </h2>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Enforced</span>
+                <span className={`px-2 py-1 rounded text-sm font-medium ${status.review.enforced ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {status.review.enforced ? 'Yes' : 'No'}
+                </span>
+              </div>
+              {status.review.enforced && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Review Day</span>
+                    <span className="font-medium">{dayNames[status.review.dayOfWeek]}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Grace Period</span>
+                    <span className="font-medium">{status.review.gracePeriodHours} hours</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -826,6 +1126,14 @@ function App() {
   function ReviewView() {
     const [reviews, setReviews] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [showCreateForm, setShowCreateForm] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [updating, setUpdating] = useState<string | null>(null);
+    const [wentWell, setWentWell] = useState('');
+    const [didntGoWell, setDidntGoWell] = useState('');
+    const [blockers, setBlockers] = useState('');
+    const [learnings, setLearnings] = useState('');
+    const [adjustments, setAdjustments] = useState('');
 
     useEffect(() => {
       loadReviews();
@@ -843,6 +1151,48 @@ function App() {
       }
     }
 
+    async function handleUpdateReview(weekId: string) {
+      setUpdating(weekId);
+      try {
+        await window.electronAPI.safer.updateReview(weekId);
+        await loadReviews();
+      } catch (error) {
+        console.error('Failed to update review:', error);
+        alert('Failed to update review');
+      } finally {
+        setUpdating(null);
+      }
+    }
+
+    async function handleCreateReview() {
+      setSaving(true);
+      try {
+        await window.electronAPI.safer.createReview({
+          wentWell,
+          didntGoWell,
+          blockers,
+          learnings,
+          adjustments,
+        });
+        // Reset form
+        setWentWell('');
+        setDidntGoWell('');
+        setBlockers('');
+        setLearnings('');
+        setAdjustments('');
+        setShowCreateForm(false);
+        await loadReviews();
+        // Re-check review status to dismiss banner if applicable
+        checkReviewStatus();
+        setReviewReminderDismissed(false);
+      } catch (error) {
+        console.error('Failed to create review:', error);
+        alert('Failed to create review');
+      } finally {
+        setSaving(false);
+      }
+    }
+
     if (loading) {
       return (
         <div className="p-6 max-w-4xl mx-auto">
@@ -854,21 +1204,130 @@ function App() {
 
     return (
       <div className="p-6 max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-800 mb-6">Weekly Reviews</h1>
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">Weekly Reviews</h1>
+          <button
+            onClick={() => setShowCreateForm(!showCreateForm)}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+          >
+            {showCreateForm ? 'Cancel' : '+ New Review'}
+          </button>
+        </div>
+
+        {showCreateForm && (
+          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 className="text-xl font-bold text-gray-800 mb-4">Create Weekly Review</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Reflect on your week. Metrics will be automatically included.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  What went well this week?
+                </label>
+                <textarea
+                  value={wentWell}
+                  onChange={(e) => setWentWell(e.target.value)}
+                  placeholder="Completed tasks on time, good collaboration..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  rows={3}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  What didn't go well?
+                </label>
+                <textarea
+                  value={didntGoWell}
+                  onChange={(e) => setDidntGoWell(e.target.value)}
+                  placeholder="Interruptions, scope creep, technical issues..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  rows={3}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Blockers encountered
+                </label>
+                <input
+                  type="text"
+                  value={blockers}
+                  onChange={(e) => setBlockers(e.target.value)}
+                  placeholder="Waiting on approvals, unclear requirements..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Key learnings
+                </label>
+                <input
+                  type="text"
+                  value={learnings}
+                  onChange={(e) => setLearnings(e.target.value)}
+                  placeholder="Better estimation needed, new tool discovered..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Adjustments for next week
+                </label>
+                <input
+                  type="text"
+                  value={adjustments}
+                  onChange={(e) => setAdjustments(e.target.value)}
+                  placeholder="Block focus time, reduce WIP, delegate..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <button
+                onClick={handleCreateReview}
+                disabled={saving}
+                className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+              >
+                {saving ? 'Saving...' : 'Save Review'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {reviews.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <p>No reviews yet</p>
-            <p className="text-sm mt-2">Use the CLI to create weekly reviews: safer review</p>
+            <p className="text-sm mt-2">Click "+ New Review" to create your first weekly review</p>
           </div>
         ) : (
           <div className="space-y-4">
             {reviews.map(review => (
               <div key={review.week} className="bg-white rounded-lg shadow-md p-6">
-                <h3 className="text-lg font-bold text-gray-800 mb-3">{review.week}</h3>
-                <div className="prose prose-sm max-w-none">
-                  <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">{review.content}</pre>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-bold text-gray-800">{review.week}</h3>
+                  <button
+                    onClick={() => handleUpdateReview(review.week)}
+                    disabled={updating === review.week}
+                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+                  >
+                    {updating === review.week ? 'Updating...' : 'Update Metrics'}
+                  </button>
                 </div>
+                <div
+                  className="prose prose-sm max-w-none text-gray-700
+                    [&_table]:w-full [&_table]:border-collapse [&_table]:my-4
+                    [&_th]:border [&_th]:border-gray-300 [&_th]:bg-gray-100 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left
+                    [&_td]:border [&_td]:border-gray-300 [&_td]:px-3 [&_td]:py-2
+                    [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mb-4 [&_h1]:text-gray-800
+                    [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mt-6 [&_h2]:mb-2 [&_h2]:text-gray-700
+                    [&_ul]:list-disc [&_ul]:ml-4 [&_li]:mb-1
+                    [&_p]:mb-3 [&_strong]:font-semibold"
+                  dangerouslySetInnerHTML={{ __html: marked(review.content) }}
+                />
               </div>
             ))}
           </div>
@@ -1706,6 +2165,16 @@ function App() {
             📝 Review
           </button>
           <button
+            onClick={() => setCurrentView('status')}
+            className={`w-full text-left px-4 py-3 rounded-lg mb-2 transition-colors ${
+              currentView === 'status'
+                ? 'bg-blue-600 text-white'
+                : 'hover:bg-gray-800 text-gray-300'
+            }`}
+          >
+            🔧 Status
+          </button>
+          <button
             onClick={() => setCurrentView('import')}
             className={`w-full text-left px-4 py-3 rounded-lg mb-2 transition-colors ${
               currentView === 'import'
@@ -1733,10 +2202,44 @@ function App() {
 
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto">
+        {/* Review Reminder Banner */}
+        {reviewReminder?.needed && !reviewReminderDismissed && (
+          <div className="bg-amber-100 border-b border-amber-300 px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-amber-600 text-xl">⚠️</span>
+              <div>
+                <p className="font-medium text-amber-800">
+                  Weekly Review Needed: {reviewReminder.weekId}
+                </p>
+                <p className="text-sm text-amber-700">
+                  {reviewReminder.daysOverdue === 0
+                    ? "It's review day! Take a few minutes to reflect on last week."
+                    : `${reviewReminder.daysOverdue} day${reviewReminder.daysOverdue > 1 ? 's' : ''} overdue. Complete your weekly review to track progress.`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentView('review')}
+                className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium transition-colors"
+              >
+                Do Review Now
+              </button>
+              <button
+                onClick={() => setReviewReminderDismissed(true)}
+                className="text-amber-600 hover:text-amber-800 px-2 py-1 text-sm"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
         {currentView === 'today' && <TodayView />}
         {currentView === 'all' && <AllItemsView />}
         {currentView === 'metrics' && <MetricsView />}
         {currentView === 'review' && <ReviewView />}
+        {currentView === 'status' && <StatusView />}
         {currentView === 'import' && <ImportView />}
         {currentView === 'settings' && <SettingsView />}
       </div>

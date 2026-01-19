@@ -84,6 +84,74 @@ class SAFERBridge {
     }
   }
 
+  getSystemStatus(): any {
+    try {
+      const fs = require('fs');
+      const os = require('os');
+      const saferDir = path.join(os.homedir(), '.safer');
+      const configPath = path.join(saferDir, 'config.json');
+      const gitDir = path.join(saferDir, '.git');
+      const itemsDir = path.join(saferDir, 'data', 'items');
+
+      // Load config
+      let config: any = {};
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      }
+
+      // Count active items
+      let activeItems = 0;
+      if (fs.existsSync(itemsDir)) {
+        activeItems = fs.readdirSync(itemsDir).filter((f: string) => f.endsWith('.json')).length;
+      }
+
+      // Check git status
+      let gitInitialized = fs.existsSync(gitDir);
+      let uncommittedChanges = false;
+      if (gitInitialized) {
+        try {
+          const result = execSync('git status --porcelain', { cwd: saferDir, encoding: 'utf-8' });
+          uncommittedChanges = result.trim().length > 0;
+        } catch (e) {
+          // Git check failed
+        }
+      }
+
+      // Check GitHub status
+      let githubEnabled = config.github?.enabled || false;
+      let githubConnected = false;
+      if (githubEnabled && config.github?.token) {
+        githubConnected = true;
+      }
+
+      return {
+        location: saferDir,
+        user: config.user || { name: 'Unknown', email: '' },
+        wip: {
+          current: activeItems,
+          max: config.limits?.maxWIP || 3,
+        },
+        git: {
+          initialized: gitInitialized,
+          autoCommit: config.git?.autoCommit || false,
+          uncommittedChanges,
+          remoteSync: config.git?.remoteSync || false,
+        },
+        integrations: {
+          calendar: config.calendar?.enabled || false,
+          gitHooks: config.hooks?.enabled || false,
+          github: githubEnabled,
+          githubConnected,
+          dashboardPort: config.dashboard?.port || 3456,
+        },
+        review: config.review || { enforced: false, dayOfWeek: 1, gracePeriodHours: 24 },
+      };
+    } catch (error) {
+      console.error('Error getting system status:', error);
+      return null;
+    }
+  }
+
   async setConfig(key: string, value: any): Promise<void> {
     try {
       execSync(`${this.saferPath} config set ${key} "${JSON.stringify(value).replace(/"/g, '\\"')}"`, {
@@ -152,9 +220,21 @@ class SAFERBridge {
     }
   }
 
-  async completeItem(id: string, stressLevel: number): Promise<void> {
+  async completeItem(id: string, options: { stressLevel: number; learnings: string; incidents: number; archive: boolean }): Promise<void> {
     try {
-      execSync(`${this.saferPath} complete ${id} --stress ${stressLevel}`, {
+      let cmd = `${this.saferPath} complete ${id} --stress ${options.stressLevel} --yes`;
+      if (options.learnings) {
+        // Escape quotes in learnings for shell
+        const escapedLearnings = options.learnings.replace(/"/g, '\\"');
+        cmd += ` --learnings "${escapedLearnings}"`;
+      }
+      if (options.incidents > 0) {
+        cmd += ` --incidents ${options.incidents}`;
+      }
+      if (options.archive) {
+        cmd += ' --archive';
+      }
+      execSync(cmd, {
         encoding: 'utf-8'
       });
     } catch (error) {
@@ -402,14 +482,71 @@ class SAFERBridge {
     try {
       const fs = require('fs');
       const os = require('os');
-      const metricsPath = path.join(os.homedir(), '.safer', 'data', 'metrics', 'summary.json');
-      if (fs.existsSync(metricsPath)) {
-        const data = fs.readFileSync(metricsPath, 'utf-8');
-        return JSON.parse(data);
+      const archivePath = path.join(os.homedir(), '.safer', 'data', 'archive');
+
+      if (!fs.existsSync(archivePath)) {
+        return {};
       }
-      return {};
+
+      // Collect all archived items
+      const archivedItems: any[] = [];
+
+      const scanDir = (dir: string) => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            scanDir(fullPath);
+          } else if (entry.name.endsWith('.json')) {
+            try {
+              const data = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
+              archivedItems.push(data);
+            } catch (e) {
+              // Skip invalid files
+            }
+          }
+        }
+      };
+
+      scanDir(archivePath);
+
+      if (archivedItems.length === 0) {
+        return {};
+      }
+
+      // Calculate metrics
+      const totalCompleted = archivedItems.length;
+      const totalStress = archivedItems.reduce((sum, item) => sum + (item.review?.stressLevel || 0), 0);
+      const averageStress = totalStress / totalCompleted;
+      const totalIncidents = archivedItems.reduce((sum, item) => sum + (item.review?.incidents || 0), 0);
+      const totalCycleTime = archivedItems.reduce((sum, item) => sum + (item.metrics?.cycleTime || 0), 0);
+      const averageCycleTime = totalCycleTime / totalCompleted;
+
+      // Calculate weekly trend (items completed in last 7 days)
+      const oneWeekAgo = new Date();
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+      const weeklyCompleted = archivedItems.filter(item => {
+        const updated = new Date(item.updated);
+        return updated >= oneWeekAgo;
+      }).length;
+
+      // Calculate total focus time
+      const totalFocusMinutes = archivedItems.reduce((sum, item) => {
+        const sessions = item.fence?.timeBox?.sessions || [];
+        return sum + sessions.reduce((sSum: number, s: any) => sSum + (s.duration || 0), 0);
+      }, 0);
+
+      return {
+        totalCompleted,
+        averageStress,
+        totalIncidents,
+        averageCycleTime,
+        weeklyTrend: weeklyCompleted,
+        totalFocusMinutes,
+        currentStreak: 0, // TODO: calculate streak
+      };
     } catch (error) {
-      console.error('Error reading metrics:', error);
+      console.error('Error calculating metrics:', error);
       return {};
     }
   }
@@ -438,6 +575,202 @@ class SAFERBridge {
     } catch (error) {
       console.error('Error reading reviews:', error);
       return [];
+    }
+  }
+
+  async createReview(options: {
+    wentWell: string;
+    didntGoWell: string;
+    blockers: string;
+    learnings: string;
+    adjustments: string;
+  }): Promise<void> {
+    try {
+      let cmd = `${this.saferPath} review --yes`;
+      if (options.wentWell) {
+        const escaped = options.wentWell.replace(/"/g, '\\"');
+        cmd += ` --went-well "${escaped}"`;
+      }
+      if (options.didntGoWell) {
+        const escaped = options.didntGoWell.replace(/"/g, '\\"');
+        cmd += ` --didnt-go-well "${escaped}"`;
+      }
+      if (options.blockers) {
+        const escaped = options.blockers.replace(/"/g, '\\"');
+        cmd += ` --blockers "${escaped}"`;
+      }
+      if (options.learnings) {
+        const escaped = options.learnings.replace(/"/g, '\\"');
+        cmd += ` --learnings "${escaped}"`;
+      }
+      if (options.adjustments) {
+        const escaped = options.adjustments.replace(/"/g, '\\"');
+        cmd += ` --adjustments "${escaped}"`;
+      }
+      execSync(cmd, { encoding: 'utf-8' });
+    } catch (error) {
+      console.error('Error creating review:', error);
+      throw error;
+    }
+  }
+
+  async updateReview(weekId: string): Promise<void> {
+    try {
+      const fs = require('fs');
+      const os = require('os');
+      const reviewPath = path.join(os.homedir(), '.safer', 'data', 'reviews', `${weekId}.md`);
+
+      // Parse existing review to preserve reflections
+      let wentWell = '';
+      let didntGoWell = '';
+      let blockers = '';
+      let learnings = '';
+      let adjustments = '';
+
+      if (fs.existsSync(reviewPath)) {
+        const content = fs.readFileSync(reviewPath, 'utf-8');
+
+        // Extract reflection sections using regex
+        const extractSection = (heading: string): string => {
+          const regex = new RegExp(`## ${heading}\\n\\n([\\s\\S]*?)(?=\\n## |\\n---|\$)`, 'i');
+          const match = content.match(regex);
+          if (match && match[1]) {
+            const text = match[1].trim();
+            // Skip if it's the default "no response" text
+            if (text === '_No reflections recorded_' || text === '_No response_' || text === '_None_') {
+              return '';
+            }
+            return text;
+          }
+          return '';
+        };
+
+        wentWell = extractSection('What Went Well');
+        didntGoWell = extractSection("What Didn't Go Well");
+        blockers = extractSection('Blockers');
+        learnings = extractSection('Key Learnings');
+        adjustments = extractSection('Adjustments for Next Week');
+      }
+
+      // Regenerate review with fresh metrics but preserved reflections
+      await this.createReview({
+        wentWell,
+        didntGoWell,
+        blockers,
+        learnings,
+        adjustments,
+      });
+    } catch (error) {
+      console.error('Error updating review:', error);
+      throw error;
+    }
+  }
+
+  checkReviewStatus(): { needed: boolean; weekId: string; daysOverdue: number } {
+    try {
+      const fs = require('fs');
+      const os = require('os');
+      const configPath = path.join(os.homedir(), '.safer', 'config.json');
+      const reviewsPath = path.join(os.homedir(), '.safer', 'data', 'reviews');
+
+      // Load config
+      let config = { review: { enforced: true, dayOfWeek: 1, gracePeriodHours: 24 } };
+      if (fs.existsSync(configPath)) {
+        config = { ...config, ...JSON.parse(fs.readFileSync(configPath, 'utf-8')) };
+      }
+
+      if (!config.review?.enforced) {
+        return { needed: false, weekId: '', daysOverdue: 0 };
+      }
+
+      const now = new Date();
+      const currentDayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+      const reviewDayOfWeek = config.review.dayOfWeek || 1;
+      const gracePeriodHours = config.review.gracePeriodHours || 24;
+
+      // Calculate previous week's ID
+      const getWeekNumber = (date: Date): number => {
+        const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+        const dayNum = d.getUTCDay() || 7;
+        d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+        const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+        return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+      };
+
+      // Get previous week
+      const prevWeekDate = new Date(now);
+      prevWeekDate.setDate(prevWeekDate.getDate() - 7);
+      const prevWeekNum = getWeekNumber(prevWeekDate);
+      const prevWeekYear = prevWeekDate.getFullYear();
+      const prevWeekId = `${prevWeekYear}-W${prevWeekNum.toString().padStart(2, '0')}`;
+
+      // Check if previous week's review exists
+      const reviewPath = path.join(reviewsPath, `${prevWeekId}.md`);
+      const reviewExists = fs.existsSync(reviewPath);
+
+      if (reviewExists) {
+        return { needed: false, weekId: prevWeekId, daysOverdue: 0 };
+      }
+
+      // Check if there were any items completed in the previous week
+      const archivePath = path.join(os.homedir(), '.safer', 'data', 'archive');
+      let hasItemsFromPrevWeek = false;
+
+      if (fs.existsSync(archivePath)) {
+        const scanDir = (dir: string): boolean => {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              if (scanDir(fullPath)) return true;
+            } else if (entry.name.endsWith('.json')) {
+              try {
+                const data = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
+                const itemDate = new Date(data.updated);
+                const itemWeek = getWeekNumber(itemDate);
+                const itemYear = itemDate.getFullYear();
+                if (itemWeek === prevWeekNum && itemYear === prevWeekYear) {
+                  return true;
+                }
+              } catch (e) {
+                // Skip invalid files
+              }
+            }
+          }
+          return false;
+        };
+        hasItemsFromPrevWeek = scanDir(archivePath);
+      }
+
+      // No items completed last week - no review needed
+      if (!hasItemsFromPrevWeek) {
+        return { needed: false, weekId: prevWeekId, daysOverdue: 0 };
+      }
+
+      // Check if we're within the review window (review day + grace period)
+      // Calculate days since review day this week
+      let daysSinceReviewDay = currentDayOfWeek - reviewDayOfWeek;
+      if (daysSinceReviewDay < 0) {
+        daysSinceReviewDay += 7;
+      }
+
+      const hoursSinceReviewDay = daysSinceReviewDay * 24 + now.getHours();
+
+      // If we haven't reached review day yet this week, no reminder needed
+      if (daysSinceReviewDay < 0 || (daysSinceReviewDay === 0 && now.getHours() < 9)) {
+        return { needed: false, weekId: prevWeekId, daysOverdue: 0 };
+      }
+
+      // If within grace period, show reminder
+      if (hoursSinceReviewDay <= gracePeriodHours) {
+        return { needed: true, weekId: prevWeekId, daysOverdue: daysSinceReviewDay };
+      }
+
+      // Past grace period - still show reminder but mark as overdue
+      return { needed: true, weekId: prevWeekId, daysOverdue: daysSinceReviewDay };
+    } catch (error) {
+      console.error('Error checking review status:', error);
+      return { needed: false, weekId: '', daysOverdue: 0 };
     }
   }
 
@@ -485,11 +818,6 @@ function createWindow() {
 
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
-  // Open DevTools in development
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.webContents.openDevTools();
-  }
-
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -508,6 +836,10 @@ function setupIPC() {
 
   ipcMain.handle('safer:status', async () => {
     return await safer.getStatus();
+  });
+
+  ipcMain.handle('safer:system-status', async () => {
+    return safer.getSystemStatus();
   });
 
   ipcMain.handle('safer:show', async (event, id: string) => {
@@ -547,8 +879,8 @@ function setupIPC() {
     return { success: true };
   });
 
-  ipcMain.handle('safer:complete', async (event, id: string, stressLevel: number) => {
-    await safer.completeItem(id, stressLevel);
+  ipcMain.handle('safer:complete', async (event, id: string, options: { stressLevel: number; learnings: string; incidents: number; archive: boolean }) => {
+    await safer.completeItem(id, options);
     return { success: true };
   });
 
@@ -589,6 +921,26 @@ function setupIPC() {
 
   ipcMain.handle('safer:reviews', async () => {
     return await safer.getReviews();
+  });
+
+  ipcMain.handle('safer:review:create', async (event, options: {
+    wentWell: string;
+    didntGoWell: string;
+    blockers: string;
+    learnings: string;
+    adjustments: string;
+  }) => {
+    await safer.createReview(options);
+    return { success: true };
+  });
+
+  ipcMain.handle('safer:review:update', async (event, weekId: string) => {
+    await safer.updateReview(weekId);
+    return { success: true };
+  });
+
+  ipcMain.handle('safer:review:check', async () => {
+    return safer.checkReviewStatus();
   });
 
   ipcMain.handle('safer:start', async (event, id: string) => {
